@@ -26,7 +26,9 @@ esac
 
 # === Fetch Versions (v6 & v7 only) ===
 echo "[+] Fetching available versions..."
-VERSIONS=$(curl -s https://mikrotik.com/download/archive | grep -oP 'routeros/\K[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -V | uniq)
+VERSIONS=$( (curl -s https://download.mikrotik.com/routeros/6.x/; curl -s https://download.mikrotik.com/routeros/7.x/) \
+    | grep -oP 'href="\K[0-9]+\.[0-9]+(\.[0-9]+)?(?=/")' \
+    | sort -V | uniq)
 
 if [ -z "$VERSIONS" ]; then
     echo "[-] Failed to fetch version list!"
@@ -48,7 +50,12 @@ else
     IMG_FILE="chr-$VERSION.img.zip"
 fi
 
-URL="$BASE_URL/$VERSION/$IMG_FILE"
+if [ "$SRC_CHOICE" -eq 1 ]; then
+    URL="$BASE_URL/$VERSION/$IMG_FILE"
+else
+    URL="$BASE_URL/$VERSION/chr-$VERSION.img.zip"
+fi
+
 echo "[+] Downloading image: $URL"
 curl -L -o chr.img.zip "$URL"
 
