@@ -6,11 +6,11 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# Source selection
+# Function to select source
 select_source() {
   echo "Select download source:"
   echo "1) Official (mikrotik.com)"
-  echo "2) Mirror (GitHub patched via mikrotik.ltd equivalent)"
+  echo "2) Mirror (GitHub patched via MikroTikPatch)"
   echo "3) Exit"
   read -p "Enter choice (1-3): " choice
   case $choice in
@@ -21,79 +21,109 @@ select_source() {
   esac
 }
 
-# Fetch latest version (only for official)
-get_official_version() {
+# Fetch latest v6 & v7 from official site
+get_latest_versions() {
   URL="https://mikrotik.com/download"
   HTML=$(curl -s "$URL")
   V6=$(echo "$HTML" | grep -oP '(?<=routeros/)[0-9.]+(?=/chr-[0-9.]+\.img\.zip)' | grep '^6' | sort -Vr | head -n1)
   V7=$(echo "$HTML" | grep -oP '(?<=routeros/)[0-9.]+(?=/chr-[0-9.]+\.img\.zip)' | grep '^7' | sort -Vr | head -n1)
 }
 
-# Version selection
+# Function to select version
 select_version() {
-  if [[ $SOURCE == official ]]; then
-    echo "1) RouterOS v6: $V6"
-    echo "2) RouterOS v7: $V7"
-    read -p "Choose (1 or 2): " c
-    case $c in
-      1) SELECTED="$V6" ;;
-      2) SELECTED="$V7" ;;
-      *) select_version ;;
-    esac
-  else
-    read -p "Enter patch version (default 7.19.4): " INPUT
-    SELECTED="${INPUT:-7.19.4}"
-  fi
-  echo "Selected version: $SELECTED"
+  echo "1) RouterOS v6: $V6"
+  echo "2) RouterOS v7: $V7"
+  echo "3) Exit"
+  read -p "Enter your choice (1, 2, or 3): " choice
+  case $choice in
+    1) SELECTED_VERSION="$V6" ;;
+    2) SELECTED_VERSION="$V7" ;;
+    3) exit 0 ;;
+    *) echo "Invalid selection."; select_version ;;
+  esac
+  echo "[+] Selected RouterOS Version: $SELECTED_VERSION"
 }
 
-# Detect architecture & prepare mirror URL (like chr.sh)
-get_mirror_url() {
-  ARCH=$(uname -m)
-  if [[ "$ARCH" =~ ^(x86_64|i[3-6]86)$ ]]; then
-    if [[ -d /sys/firmware/efi ]]; then
-      IMG_URL="https://github.com/elseif/MikroTikPatch/releases/download/$SELECTED/chr-$SELECTED.img.zip"
-    else
-      IMG_URL="https://github.com/elseif/MikroTikPatch/releases/download/$SELECTED/chr-$SELECTED-legacy-bios.img.zip"
-    fi
-  elif [[ "$ARCH" == aarch64 ]]; then
-    IMG_URL="https://github.com/elseif/MikroTikPatch/releases/download/${SELECTED}-arm64/chr-${SELECTED}-arm64.img.zip"
+# Detect UEFI vs BIOS
+detect_boot_mode() {
+  if [[ -d /sys/firmware/efi ]]; then
+    BOOT_MODE="uefi"
   else
-    echo "Unsupported architecture: $ARCH"
-    exit 1
+    BOOT_MODE="bios"
   fi
+  echo "[+] Detected boot mode: $BOOT_MODE"
 }
 
-# Gather environment info
+# Collect environment info
 get_env_info() {
   STORAGE=$(lsblk -d -n -o NAME,TYPE | awk '$2=="disk"{print $1;exit}')
-  ETH=$(ip route show default | grep '^default' | sed -n 's/.* dev \([^\ ]*\) .*/\1/p')
+  ETH=$(ip route show default | awk '{print $5}' | head -n1)
   ADDRESS=$(ip addr show $ETH | grep global | awk '{print $2}' | head -n1)
   GATEWAY=$(ip route | grep '^default' | awk '{print $3}')
+  echo "[+] STORAGE   : $STORAGE"
+  echo "[+] INTERFACE : $ETH"
+  echo "[+] IP ADDR   : $ADDRESS"
+  echo "[+] GATEWAY   : $GATEWAY"
 }
 
-# Main
+# --- Main ---
+echo "[1] Preparation"
+apt update -y -o Dpkg::Progress-Fancy="1" && apt upgrade -y -o Dpkg::Progress-Fancy="1"
+apt install -y unzip wget curl
+clear
+
+echo "[2] Select Source"
 select_source
-if [[ $SOURCE == official ]]; then
-  get_official_version
-  select_version
-  URL="https://download.mikrotik.com/routeros/$SELECTED/chr-$SELECTED.img.zip"
-else
-  select_version
-  get_mirror_url
-  URL="$IMG_URL"
-fi
 
+echo "[3] Fetching latest versions..."
+get_latest_versions
+
+echo "[4] Select RouterOS Version"
+select_version
+
+echo "[5] Detecting boot mode..."
+detect_boot_mode
+
+echo "[6] Collecting system info..."
 get_env_info
-echo "Using storage: $STORAGE, interface: $ETH, IP: $ADDRESS, gateway: $GATEWAY"
-echo "Download URL: $URL"
 
-# Download
-cd /tmp
-if command -v wget &>/dev/null; then
-  wget --progress=dot:giga "$URL" -O chr.img.zip || { echo "Download failed."; exit 1; }
+# Decide download URL
+if [[ $SOURCE == "official" ]]; then
+  URL="https://download.mikrotik.com/routeros/$SELECTED_VERSION/chr-$SELECTED_VERSION.img.zip"
 else
-  curl -L "$URL" -o chr.img.zip || { echo "Download failed."; exit 1; }
+  if [[ $BOOT_MODE == "bios" ]]; then
+    URL="https://github.com/elseif/MikroTikPatch/releases/download/$SELECTED_VERSION/chr-$SELECTED_VERSION-legacy-bios.img.zip"
+  else
+    URL="https://github.com/elseif/MikroTikPatch/releases/download/$SELECTED_VERSION/chr-$SELECTED_VERSION.img.zip"
+  fi
 fi
 
-# Unzip, mount, configure, flash, reboot (as in your original script logic)...
+echo "[+] Downloading from: $URL"
+wget --progress=dot:giga "$URL" -O chr.img.zip || { echo "Download failed."; exit 1; }
+
+echo "[+] Extracting image..."
+unzip -o chr.img.zip >/dev/null || { echo "Unzip failed."; exit 1; }
+
+# Mount and configure autorun
+MOUNT_POINT="/mnt"
+mkdir -p $MOUNT_POINT
+mount -o loop,offset=$((1 * 512)) chr.img $MOUNT_POINT || { echo "Mount failed."; exit 1; }
+
+echo "[+] Writing autorun configuration..."
+cat > $MOUNT_POINT/rw/autorun.scr <<EOF
+/ip address add address=$ADDRESS interface=[/interface ethernet find where name=ether1]
+/ip route add gateway=$GATEWAY
+/ip service disable telnet
+/system ntp client set enabled=yes primary-ntp=0.id.pool.ntp.org secondary-ntp=1.id.pool.ntp.org
+/ip dns set servers=8.8.8.8,1.1.1.1
+EOF
+
+umount $MOUNT_POINT
+
+# Flash to disk
+echo "[7] Flashing image to /dev/$STORAGE ..."
+dd if=chr.img of=/dev/$STORAGE bs=1M status=progress || { echo "dd failed."; exit 1; }
+
+sync
+echo "[8] Installation complete. Rebooting..."
+reboot
