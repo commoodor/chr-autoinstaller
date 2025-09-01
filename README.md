@@ -2,11 +2,11 @@
 ## build date : dec 2024
 ### just run
 ~~~
-wget -qO- https://github.com/commoodor/chr-autoinstaller/raw/refs/heads/latest/run.sh | bash
+bash <(wget -qO- https://github.com/commoodor/chr-autoinstaller/raw/refs/heads/latest/run.sh)
 ~~~
 Or
 ~~~
-curl -Lso- https://github.com/commoodor/chr-autoinstaller/raw/refs/heads/latest/run.sh | bash
+bash <(curl -s https://github.com/commoodor/chr-autoinstaller/raw/refs/heads/latest/run.sh)
 ~~~
 
 
